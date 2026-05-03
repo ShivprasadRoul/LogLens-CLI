@@ -73,3 +73,4 @@ htmlcov/
 dist/
 build/
 *.egg-info/
+*.json
