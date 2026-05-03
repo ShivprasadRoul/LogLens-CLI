@@ -19,9 +19,9 @@ PROVIDERS = {
 # Model catalog — used by the interactive picker
 MODELS = {
     "openai": {
-        "Core LLMs": ["gpt-5.3", "gpt-5", "gpt-4o", "gpt-4o-mini"],
-        "Reasoning": ["o3", "o1"],
-        "Fast & Cheap": ["gpt-4o-mini"],
+        "Frontier": ["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano"],
+        "GPT-5": ["gpt-5", "gpt-5.2", "gpt-5.1", "gpt-5-mini", "gpt-5-nano"],
+        "Production": ["gpt-4.1", "gpt-4o", "gpt-4o-mini"],
     },
     "anthropic": {
         "Core LLMs": ["claude-opus-4-5", "claude-sonnet-4-5", "claude-haiku-3-5"],
