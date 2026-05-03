@@ -585,26 +585,125 @@ def config_set_key(
 
 @config_app.command(name="set-provider")
 def config_set_provider(
-    provider: str = typer.Argument(..., help=f"Provider: {', '.join(cfg.PROVIDERS)}"),
+    provider: str = typer.Argument(None, help=f"Provider: {', '.join(cfg.PROVIDERS)}. If omitted, opens interactive picker."),
 ) -> None:
-    """Switch the active LLM provider."""
+    """Switch the active LLM provider — interactive picker if no argument given."""
+    if provider:
+        try:
+            cfg.set_provider(provider)
+            model = cfg.PROVIDERS[provider]["default_model"]
+            console.print(f"[success]✓[/success] Provider: [bold]{provider}[/bold] (model: {model})")
+        except ValueError as e:
+            console.print(f"[error]Error:[/error] {e}")
+            raise typer.Exit(1)
+        return
+
+    # ── Interactive provider picker ──
+    current = cfg.get_active_provider()
+    current_cfg = cfg.load()
+
+    console.print(f"\n[bold blue]Select a provider[/bold blue]")
+    console.print(f"[muted]Current: {current}[/muted]\n")
+
+    providers = list(cfg.PROVIDERS.keys())
+    for i, p in enumerate(providers, 1):
+        has_key = bool(current_cfg.get("api_keys", {}).get(p))
+        key_status = "[green]✓ key configured[/green]" if has_key else "[dim]no key[/dim]"
+        marker = " [green]← active[/green]" if p == current else ""
+        default_model = cfg.PROVIDERS[p]["default_model"]
+        console.print(f"  [cyan]{i}[/cyan]) [bold]{p}[/bold]  ({default_model})  {key_status}{marker}")
+
+    console.print()
     try:
-        cfg.set_provider(provider)
-        model = cfg.PROVIDERS[provider]["default_model"]
-        console.print(f"[success]✓[/success] Provider: [bold]{provider}[/bold] (model: {model})")
-    except ValueError as e:
-        console.print(f"[error]Error:[/error] {e}")
+        choice = console.input("[bold]Enter number: [/bold]")
+    except (EOFError, KeyboardInterrupt):
+        console.print("\n[muted]Cancelled.[/muted]")
+        return
+
+    choice = choice.strip()
+    if not choice:
+        console.print("[muted]Cancelled.[/muted]")
+        return
+
+    if choice.isdigit() and 1 <= int(choice) <= len(providers):
+        selected = providers[int(choice) - 1]
+    elif choice in providers:
+        selected = choice
+    else:
+        console.print(f"[error]Invalid choice.[/error]")
         raise typer.Exit(1)
+
+    cfg.set_provider(selected)
+    model = cfg.PROVIDERS[selected]["default_model"]
+    console.print(f"\n[success]✓[/success] Provider → [bold]{selected}[/bold] (model: {model})")
 
 
 @config_app.command(name="set-model")
 def config_set_model(
-    model: str = typer.Argument(..., help="Model name (e.g. gpt-4o-mini, claude-haiku-4-5)"),
+    model: str = typer.Argument(None, help="Model name (e.g. gpt-4o-mini). If omitted, opens interactive picker."),
 ) -> None:
-    """Override the model for the active provider."""
-    cfg.set_model(model)
+    """Set the model — interactive picker if no argument given."""
+    if model:
+        # Direct mode
+        cfg.set_model(model)
+        provider = cfg.get_active_provider()
+        console.print(f"[success]✓[/success] Model → [bold]{model}[/bold] for [bold]{provider}[/bold].")
+        return
+
+    # ── Interactive model picker ──
     provider = cfg.get_active_provider()
-    console.print(f"[success]✓[/success] Model → [bold]{model}[/bold] for [bold]{provider}[/bold].")
+    current_model = cfg.get_model()
+    catalog = cfg.MODELS.get(provider, {})
+
+    if not catalog:
+        console.print(f"[warning]No model catalog found for provider '{provider}'.[/warning]")
+        console.print("[muted]Set a model directly: loglens config set-model <model-name>[/muted]")
+        return
+
+    console.print(f"\n[bold blue]Select a model for [cyan]{provider}[/cyan][/bold blue]")
+    console.print(f"[muted]Current: {current_model}[/muted]\n")
+
+    # Build numbered list
+    all_models = []
+    seen = set()
+    for category, models in catalog.items():
+        console.print(f"  [bold dim]{category}[/bold dim]")
+        for m in models:
+            if m in seen:
+                continue
+            seen.add(m)
+            idx = len(all_models) + 1
+            all_models.append(m)
+            marker = " [green]← current[/green]" if m == current_model else ""
+            console.print(f"    [cyan]{idx}[/cyan]) {m}{marker}")
+        console.print()
+
+    # Prompt
+    try:
+        choice = console.input("[bold]Enter number (or model name): [/bold]")
+    except (EOFError, KeyboardInterrupt):
+        console.print("\n[muted]Cancelled.[/muted]")
+        return
+
+    choice = choice.strip()
+    if not choice:
+        console.print("[muted]Cancelled.[/muted]")
+        return
+
+    # Resolve choice
+    if choice.isdigit():
+        idx = int(choice)
+        if 1 <= idx <= len(all_models):
+            selected = all_models[idx - 1]
+        else:
+            console.print(f"[error]Invalid choice.[/error] Enter 1-{len(all_models)}.")
+            raise typer.Exit(1)
+    else:
+        selected = choice  # Allow custom model names too
+
+    cfg.set_model(selected)
+    console.print(f"\n[success]✓[/success] Model → [bold]{selected}[/bold] for [bold]{provider}[/bold].")
+
 
 
 # ── skills subcommands ────────────────────────────────────────────────────────

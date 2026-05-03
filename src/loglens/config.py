@@ -16,6 +16,27 @@ PROVIDERS = {
     "gemini":    {"env": "GEMINI_API_KEY",    "default_model": "gemini-1.5-pro"},
 }
 
+# Model catalog — used by the interactive picker
+MODELS = {
+    "openai": {
+        "Core LLMs": ["gpt-5.3", "gpt-5", "gpt-4o", "gpt-4o-mini"],
+        "Reasoning": ["o3", "o1"],
+        "Fast & Cheap": ["gpt-4o-mini"],
+    },
+    "anthropic": {
+        "Core LLMs": ["claude-opus-4-5", "claude-sonnet-4-5", "claude-haiku-3-5"],
+        "Fast & Cheap": ["claude-haiku-3-5"],
+    },
+    "groq": {
+        "Core LLMs": ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "mixtral-8x7b-32768"],
+        "Fast & Cheap": ["llama-3.1-8b-instant"],
+    },
+    "gemini": {
+        "Core LLMs": ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-1.5-pro", "gemini-1.5-flash"],
+        "Fast & Cheap": ["gemini-2.5-flash", "gemini-1.5-flash"],
+    },
+}
+
 _DEFAULTS: Dict[str, Any] = {
     "llm_provider": "openai",
     "model": "gpt-4o",
