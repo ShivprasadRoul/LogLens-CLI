@@ -100,23 +100,71 @@ def _header(title: str, subtitle: str = "") -> None:
     console.print()
 
 
+def _parse_sections(text: str) -> dict:
+    """Split LLM output into ANSWER / DETAILS / EVIDENCE sections."""
+    import re
+    sections = {"answer": text, "details": "", "evidence": ""}
+    # Match section headers like ANSWER:, DETAILS:, EVIDENCE:
+    pattern = re.compile(r'^(ANSWER|DETAILS|EVIDENCE)\s*:\s*$', re.MULTILINE | re.IGNORECASE)
+    parts = pattern.split(text)
+    if len(parts) >= 3:
+        # parts = [pre, header1, content1, header2, content2, ...]
+        mapping = {}
+        for i in range(1, len(parts) - 1, 2):
+            mapping[parts[i].upper()] = parts[i + 1].strip()
+        sections["answer"]   = mapping.get("ANSWER", text).strip()
+        sections["details"]  = mapping.get("DETAILS", "").strip()
+        sections["evidence"] = mapping.get("EVIDENCE", "").strip()
+        # If answer + details both exist, combine for the main panel
+        if sections["details"]:
+            sections["main"] = sections["answer"] + "\n\n" + sections["details"]
+        else:
+            sections["main"] = sections["answer"]
+    else:
+        sections["main"] = text
+    return sections
+
+
 def _print_answer(result: dict, show_jq: bool = False) -> None:
     """Render the Copilot answer in a rich panel with footer."""
-    answer_md = Markdown(result["answer"])
+    raw_answer = result["answer"]
     passes = result["attempts"]
     model  = cfg.get_model()
     skill  = result.get("skill", "?")
     jq     = result.get("jq_program", "")
 
-    # Main answer panel
+    # Parse structured sections
+    secs = _parse_sections(raw_answer)
+
+    # Main answer panel (ANSWER + DETAILS)
     console.print(Panel(
-        answer_md,
+        Markdown(secs["main"]),
         title="[copilot] Copilot[/copilot]",
         border_style="green",
         padding=(1, 2),
     ))
 
-    # Footer row — passes + model + skill
+    # Evidence panel — separate, distinct style
+    evidence = secs.get("evidence", "").strip()
+    # Strip any "Bottom line:" trailer the LLM sometimes appends to evidence
+    if "bottom line" in evidence.lower():
+        evidence = evidence[:evidence.lower().find("bottom line")].strip()
+    no_evidence_phrases = ("no evidence", "query returned no records", "(no evidence")
+    if evidence and not any(p in evidence.lower() for p in no_evidence_phrases):
+        ev_lines = []
+        for line in evidence.splitlines():
+            line = line.strip().lstrip("•-").strip()
+            if line:
+                ev_lines.append(f"  [dim cyan]{line}[/dim cyan]")
+        if ev_lines:
+            console.print(Panel(
+                "\n".join(ev_lines),
+                title="[dim]Evidence[/dim]",
+                border_style="dim red",
+                padding=(0, 1),
+            ))
+
+    # Footer row
     footer = Text()
     footer.append(f" {passes} retrieval pass{'es' if passes != 1 else ''}", style="muted")
     footer.append("  ·  ", style="muted")
