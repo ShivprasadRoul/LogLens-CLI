@@ -7,146 +7,95 @@
 
 ---
 
-**LogLens** is a local CLI tool that turns gigabytes of messy, semi-structured logs into a conversational interface. Instead of using expensive, hallucination-prone vector embeddings, LogLens streams your logs to discover their schema, and then uses an LLM to write exact `jq` queries to extract the precise data needed to answer your questions.
+**LogLens** is a local CLI tool that turns gigabytes of messy, semi-structured logs into a conversational interface. Unlike traditional RAG systems that use hallucination-prone vector embeddings, LogLens uses **Vectorless RAG**: it streams your logs to discover their exact schema, and then uses an LLM to write precise `jq` queries to extract the data needed for 100% accurate answers.
 
-## Features
+## 🌟 Key Features
 
-- **Vectorless Architecture**: No embeddings, no vector DB, no chunking. 100% accurate data extraction via LLM-generated `jq` code.
-- **BYOK (Bring Your Own Key)**: Use OpenAI, Anthropic, Gemini, or Groq.
-- **Automatic Schema Discovery**: Ingests JSON, logfmt, Nginx, systemd, and Python tracebacks automatically.
-- **Persistent Memory**: Multi-turn chat context is saved per session.
-- **Skills System**: Pluggable `.toml` files let you teach the agent domain-specific knowledge about your logs.
+- **Vectorless Architecture**: No embeddings, no vector DB. Exact data extraction via LLM-generated `jq`.
+- **Intelligent Briefing**: Instantly scans logs upon chat start to surface errors, failing endpoints, and latency issues.
+- **Raw Evidence Anchors**: Every answer includes an "Evidence" panel showing the exact log lines used to generate the response.
+- **Skills System**: Pluggable domain knowledge for Nginx, Python, Systemd, and more.
+- **Multi-Provider Support**: BYOK (Bring Your Own Key) for OpenAI, Anthropic, Gemini, and Groq.
+- **Interactive Configuration**: Easy-to-use pickers for switching models and providers.
 
 ---
 
 ## 🚀 Quick Start
 
 ### 1. Install
-Run the one-line installer (supports macOS, Ubuntu/Debian, and Arch Linux):
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ShivprasadRoul/LogLens/main/install.sh | bash
 ```
-*(Requires Python 3.9+ and `jq`)*
 
-### 2. Configure your API Key
-LogLens needs an LLM to generate `jq` queries and synthesize answers.
+### 2. Configure
 ```bash
-loglens config set-key openai <your-api-key>
+loglens config set-key openai sk-...
+loglens config set-provider openai
+loglens config set-model          # Opens interactive picker
 ```
-*Optional: Change provider or model (e.g. `loglens config set-provider anthropic`)*
 
-### 3. Ingest a Log File
-Point LogLens at a log file to extract its schema and ID mappings:
+### 3. Ingest & Analyze
 ```bash
 loglens ingest /var/log/nginx/access.log --name my-app
-```
-
-### 4. Ask Questions
-Ask one-off questions:
-```bash
-loglens query my-app -q "Which endpoint is throwing the most 500 errors?"
-```
-
-Or start an interactive chat session:
-```bash
 loglens chat my-app
 ```
 
 ---
 
-## 🛠 Command Reference
+## 🛠 Command Summary
 
-### Core Commands
-| Command | Description |
+### Core Analysis
+| Command | Usage |
 |---|---|
-| `loglens ingest <file>` | Parse a log file and cache its schema for querying |
-| `loglens query <session> -q "..."` | Ask a single question about an ingested session |
-| `loglens chat <session>` | Open an interactive chat with persistent memory |
-| `loglens sessions` | View a table of all cached log sessions |
-| `loglens refresh <session>` | Re-ingest the log file to pick up new data |
-| `loglens clear-history <session>` | Wipe the chat history for a session |
+| `ingest` | `loglens ingest <file> [--name <name>]` - Parse logs into a session |
+| `query` | `loglens query <session> -q "..."` - Single question analysis |
+| `chat` | `loglens chat <session>` - Interactive multi-turn chat |
+| `sessions` | `loglens sessions` - List all ingested log sessions |
+| `refresh` | `loglens refresh <session>` - Re-parse logs (keeps history by default) |
+| `delete` | `loglens delete <session>` - Remove a session and all cached data |
+| `update` | `loglens update` - Self-update LogLens to latest version |
 
-### Configuration
-| Command | Description |
+### Configuration (`loglens config ...`)
+| Command | Usage |
 |---|---|
-| `loglens config show` | View current active settings |
-| `loglens config set-key <provider> <key>` | Save an API key securely (supports `openai`, `anthropic`, `gemini`, `groq`) |
-| `loglens config set-provider <provider>` | Switch the active LLM provider |
-| `loglens config set-model <model>` | Override the default model (e.g. `gpt-4o-mini`) |
+| `show` | `loglens config show` - View active settings |
+| `set-key` | `loglens config set-key <provider> <key>` - Save an API key |
+| `set-provider`| `loglens config set-provider [provider]` - Switch active LLM |
+| `set-model` | `loglens config set-model [model]` - Switch active model |
+
+### Skills Management (`loglens skills ...`)
+| Command | Usage |
+|---|---|
+| `list` | `loglens skills list` - List all available log formats |
+| `show` | `loglens skills show <name>` - View skill details and hints |
+| `add` | `loglens skills add <file>` - Install a custom log format |
+| `remove` | `loglens skills remove <name>` - Delete a user-installed skill |
 
 ---
 
-## 🧠 The Skills System
+## 📚 Documentation
 
-LogLens uses a **Skills System** to understand the domain of your logs. A skill is simply a `.toml` file that tells the LLM what specific fields mean and how to query them.
+For detailed guides, check out the `docs/` folder:
 
-View active skills:
-```bash
-loglens skills list
-```
-
-### Built-in Skills
-- **`app_logs`**: Generic application logs (Python, Node, Java)
-- **`nginx_access`**: HTTP traffic, latency, 5xx rate analysis
-- **`nginx_error`**: Upstream timeouts, connection failures
-- **`systemd`**: Service crashes, restart loops
-- **`python_app`**: Python traceback parsing
-
-LogLens auto-detects the right skill based on the fields found in your logs. If you want to override it, use the `--skill` flag:
-```bash
-loglens chat my-app --skill nginx_access
-```
-
-### Writing a Custom Skill
-You can teach LogLens about your proprietary log formats by creating a custom skill:
-
-**`my_custom_skill.toml`**
-```toml
-[meta]
-name = "my_custom_skill"
-description = "Analysis for my custom billing service logs"
-
-[detection]
-signals = ["billing_id", "stripe_customer", "invoice_status"]
-
-[prompts]
-domain_context = """
-DOMAIN: Billing Service Logs.
-Focus on 'invoice_status' == 'failed'. A failure rate > 2% is CRITICAL.
-"""
-jq_hints = """
-- Invoice ID: .billing_id
-- Customer: .stripe_customer
-"""
-```
-
-Install it with:
-```bash
-loglens skills add my_custom_skill.toml
-```
+- [**Getting Started**](docs/getting-started.md): Installation and first steps.
+- [**CLI Reference**](docs/cli-reference.md): Full breakdown of every command and flag.
+- [**Skills System**](docs/skills.md): How to write custom log formats for your domain.
+- [**Architecture**](architecture.md): Deep dive into Vectorless RAG and `jq` generation.
 
 ---
 
-## 🏗 Architecture: How Vectorless RAG Works
+## 🏗 Why Vectorless RAG?
 
-Unlike traditional RAG (Retrieval-Augmented Generation) which chunks logs and stores them in a Vector Database (often resulting in hallucinated or missing data during exact-match queries), LogLens guarantees 100% data extraction accuracy.
+Traditional RAG chunks logs and searches for "similar" text. This fails for logs because:
+1. **Precision matters**: "404" is not "similar" to "500", but a vector search might treat them as such.
+2. **Cardinality**: Finding "the user who failed the most" requires looking at *every* record, not just the "top 5 chunks."
+3. **Logic**: Calculating failure rates or P99 latency requires computation, not just retrieval.
 
-1. **Schema Discovery**: `ijson` streams your log file and maps the exact schema, data types, and occurrence rates of every field.
-2. **Context Injection**: The Agent loads the schema + domain context (from Skills).
-3. **Pass 1 (Exploration)**: The LLM writes a `jq` query to sample 3 raw records to confirm the exact data structure.
-4. **Pass 2 (Extraction)**: The LLM writes a precise `jq` query to filter, group, and aggregate the data.
-5. **Synthesis**: The exact JSON output of the `jq` command is fed back to the LLM to write a natural language response.
-
-*If the `jq` query fails, the LLM is fed the exact stderr from the bash execution and retries up to 3 times.*
+LogLens solves this by using the LLM as a **programmer**, not just a searcher. It writes a `jq` program that executes locally on your logs, providing the exact data needed for a truthful, data-backed answer.
 
 ---
-
-## Contributing
-
-1. Clone the repo
-2. Install `uv` (the Python package manager)
-3. Run `uv sync` to install dependencies
-4. Run `uv run pytest tests/` to verify tests pass
 
 ## License
+MIT
+License
 MIT

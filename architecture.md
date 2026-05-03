@@ -10,162 +10,70 @@ LogLens is a developer-focused CLI tool that converts raw system logs into struc
 
 ## System Architecture
 
-### 8-Step Pipeline
-
-LogLens follows a structured 8-step pipeline for processing logs and answering queries:
+LogLens follows a structured 5-stage pipeline for processing logs and answering queries:
 
 ```
 Raw Log File
     ↓
-[1. Log Parser] → Structured JSON
+[1. Ingestion]  → Parser streams logs to JSON
     ↓
-[2. Schema Discovery] → Schema + ID Map (cached)
+[2. Discovery]  → Schema & ID Map discovery (cached)
     ↓
-[3. ID Map Builder] → Entity relationship map (cached)
+[3. Detection]  → Skills system detects log domain (cached)
     ↓
-[4. Domain Detection] → Log domain context (cached)
+[4. Retrieval]  → Two-Pass Retrieval (Exploration → Extraction)
     ↓
-[5. jq Code Generation] → Query programs via CoT
-    ↓
-[6. Two-Pass Retrieval] → Explore → Retry Loop
-    ↓
-[7. Insight Synthesis] → Actionable answers
-    ↓
-[8. Memory & History] → Conversation history (cached)
+[5. Synthesis]  → Narrative answer + Evidence block
 ```
 
-### Pipeline Stages
-
-| # | Stage | Component | Role | Cached |
-|---|-------|-----------|------|--------|
-| 1 | Input | Log Parser | Converts `.log` to structured JSON with typed fields | No |
-| 2 | Analysis | Schema Discovery | Builds structural map via streaming `ijson` | Yes |
-| 3 | Analysis | ID Map Builder | Detects entity relationships and builds lookup | Yes |
-| 4 | Context | Domain Detection | Identifies log domain and injects context | Yes |
-| 5 | Query Gen | jq Code Gen (CoT) | LLM generates `jq` step-by-step programs | No |
-| 6 | Retrieval | Two-Pass Query | Pass 1 explores, Pass 2 extracts with retry | No |
-| 7 | Output | Insight Synthesis | Synthesizes raw data into insights | No |
-| 8 | State | Memory & History | Maintains conversation state | Yes |
-
----
-
-## Module Structure
+### Module Structure
 
 ```
 src/loglens/
-├── __init__.py           # Package initialization
-├── cli.py                # Main CLI interface (Typer)
-├── parser.py             # Log parsing module
-├── schema.py             # Schema discovery
+├── cli.py                # Main CLI entry point (Typer)
+├── agent.py              # Core Agent: Retrieval, Synthesis, Briefing
+├── skills.py             # Domain Knowledge system (Nginx, Python, etc.)
+├── parser.py             # Log parsing (JSON, logfmt, Nginx, Systemd)
+├── schema.py             # Schema discovery (streaming ijson)
 ├── id_map.py             # Entity relationship mapping
-├── llm.py                # LLM integration (CoT, synthesis)
-├── jq_engine.py          # jq query execution
-├── domain.py             # Log domain detection
-└── cache.py              # Schema/history caching
+├── memory.py             # Conversation history persistence
+├── config.py             # API keys and provider/model management
+└── __init__.py           # Package init
 ```
 
-### Key Modules
+### Key Components
 
-#### `cli.py` - Main CLI (Typer)
-- `query`: Natural language query on logs
-- `ingest`: Parse and cache log structure
-- `chat`: Interactive session mode
+#### `agent.py` - The Brain
+- **Briefing**: Runs fast JQ scans at startup to surface errors and latency before the user asks anything.
+- **Two-Pass Retrieval**: 
+    - *Pass 1 (Exploration)*: LLM writes a JQ query to sample raw records and confirm field values.
+    - *Pass 2 (Extraction)*: LLM writes a precise JQ query to filter and group the exact data needed.
+- **Synthesis**: Converts raw JQ output into a narrative answer, supporting details, and an **Evidence** block showing raw logs.
 
-#### `parser.py` - Log Parsing
-Supports:
-- Structured JSON logs (structlog, Winston, Bunyan)
-- Plaintext logs (INFO/ERROR/WARNING/DEBUG)
-- Nginx access/error logs
-- Systemd/journald logs
-- Python tracebacks
-- Logfmt key=value format
+#### `skills.py` - Domain Knowledge
+Pluggable system using `.toml` files to teach the agent:
+- **Domain Context**: What thresholds matter (e.g., "500 errors are critical").
+- **JQ Hints**: Mapping natural concepts to field names (e.g., "failure rate" → `response_status >= 400`).
 
-#### `schema.py` - Schema Discovery
-- Scans JSON structure via `ijson`
-- Infers field types
-- Builds reusable schema
-- Cached at `.loglens/schema.json`
-
-#### `id_map.py` - Entity Relationship Mapping
-- Scans for common ID patterns (request_id, trace_id, user_id)
-- Builds entity-to-records index
-- Caches relationships
-- Cached at `.loglens/id_map.json`
-
-#### `domain.py` - Domain Detection
-- Detects log type (app, nginx, system, etc.)
-- Injects domain-specific prompt context
-- Cached at `.loglens/meta.json`
-
-#### `llm.py` - LLM Integration
-- CoT (Chain of Thought) for jq generation
-- Two-pass retrieval with retry
-- Insight synthesis from raw data
-
-#### `jq_engine.py` - jq Query Execution
-- Wrapper around `jq` binary
-- Executes generated queries
-- Error handling and retry logic
+#### `parser.py` - Log Streaming
+- Handles streaming large files without loading them into memory.
+- Supports structured JSON, Nginx (access/error), Systemd (journalctl), and Logfmt.
 
 ---
 
 ## Data Flow: Query Lifecycle
 
-### 1. User asks a question
-```
-loglens query logs/app.log --query "Why did the deployment fail?"
-```
-
-### 2. Load cached schema & ID map
-```
-.loglens/
-├── schema.json      # Field types, structure
-├── id_map.json      # Entity relationships
-└── meta.json        # Log domain, context
-```
-
-### 3. LLM generates jq program (CoT)
-```
-"Given schema {fields...} and domain 'app_log', 
- convert question to jq steps:
- 1. Filter ERROR level
- 2. Group by deployment_id
- 3. Extract messages"
-```
-
-### 4. Execute jq query (Pass 1: Explore)
-```bash
-jq '.[] | select(.level == "ERROR") | {deployment_id, message}'
-```
-
-### 5. Analyze results
-- If sufficient, proceed to synthesis
-- If incomplete, retry with refined query (Pass 2)
-
-### 6. Synthesize insights
-```
-LLM reads raw jq output + logs + question:
-"Deployment failed because [reason] at [time].
- Impact: [services affected].
- Next steps: [recommendations]"
-```
-
-### 7. Return answer
-```
-Deployment X failed at 10:32 UTC due to JWT validation errors.
-Affected services: auth-service, api-gateway.
-Recommendation: Check token expiration config.
-```
-
-### 8. Save to history
-```
-.loglens/history.json
-- conversation_id
-- query
-- answer
-- jq_program_used
-- timestamp
-```
+1. **User asks a question** in `cli.py`.
+2. **Context Loading**: `agent.py` loads the cached `schema.json` and `id_map.json`.
+3. **Skill Selection**: `skills.py` detects the log type based on field signals.
+4. **Pass 1 (Exploration)**: LLM generates a JQ program to find "keyword matches" and sample data.
+5. **Pass 2 (Extraction)**: LLM generates a JQ program to extract the final dataset.
+6. **Synthesis**: LLM reads the raw data and the question to produce:
+    - **ANSWER**: Direct 1-sentence response.
+    - **DETAILS**: Bullet points with data-backed insights.
+    - **EVIDENCE**: 2-5 exact log lines as "ground truth."
+7. **Display**: `cli.py` renders the answer in a green panel and the evidence in a red-bordered "Evidence" panel.
+8. **Persistence**: `memory.py` saves the turn to history for follow-up questions.
 
 ---
 
