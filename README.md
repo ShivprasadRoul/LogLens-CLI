@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="https://raw.githubusercontent.com/ShivprasadRoul/LogLens/main/docs/logo.png" width="100%" alt="LogLens — AI-Powered Log Analysis CLI" />
+  <img src="https://raw.githubusercontent.com/ShivprasadRoul/LogLens/main/docs/loglens.png" width="100%" alt="LogLens — AI-Powered Log Analysis CLI" />
 </div>
 
 ---
