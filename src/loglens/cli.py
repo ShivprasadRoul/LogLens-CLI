@@ -319,7 +319,7 @@ def chat(
 
     _header(
         "LogLens Chat",
-        f"Session: {session}  ·  Model: {cfg.get_model()}  ·  Type 'exit' to quit"
+        f"Session: {session}  ·  Model: {cfg.get_model()}  ·  Type /help for commands"
     )
 
     if hist_summary["turns"] > 0:
@@ -341,6 +341,42 @@ def chat(
         if q.lower() in ("exit", "quit", "bye"):
             console.print("[muted]Goodbye![/muted]")
             break
+
+        # ── In-chat meta-commands ──
+        if q.startswith("/"):
+            cmd = q.lower().split()[0]
+            if cmd in ("/help", "/h", "/?"):
+                console.print(Panel(
+                    "[bold]Chat Commands[/bold]\n\n"
+                    "  [cyan]/help[/cyan]       Show this help\n"
+                    "  [cyan]/clear[/cyan]      Clear chat history (fresh context)\n"
+                    "  [cyan]/sessions[/cyan]   List all sessions\n"
+                    "  [cyan]/jq[/cyan]         Toggle showing generated JQ programs\n"
+                    "  [cyan]exit[/cyan]        Quit the chat",
+                    border_style="dim",
+                ))
+                turn -= 1
+                continue
+            elif cmd in ("/clear", "/reset"):
+                history.clear()
+                memory.clear(session_dir)
+                console.print("[success]✓[/success] Chat history cleared. Starting fresh.\n")
+                turn = 0
+                continue
+            elif cmd == "/sessions":
+                sessions()
+                turn -= 1
+                continue
+            elif cmd == "/jq":
+                show_jq = not show_jq
+                state = "ON" if show_jq else "OFF"
+                console.print(f"[muted]JQ display toggled {state}.[/muted]")
+                turn -= 1
+                continue
+            else:
+                console.print(f"[warning]Unknown command '{cmd}'.[/warning] Type [cyan]/help[/cyan] for available commands.")
+                turn -= 1
+                continue
 
         windowed_history = memory.trim(history, window)
 

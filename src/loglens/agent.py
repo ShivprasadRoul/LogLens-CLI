@@ -66,8 +66,12 @@ _SYNTHESIS_SYSTEM = textwrap.dedent("""\
     2. Supporting insights as bullet points (what + why + recommendation).
     3. Use flags: ⚠️ (critical), ✅ (good), 💡 (recommendation), 📊 (data point).
 
-    Rules:
-    - ONLY use the data provided in "Retrieved Data". Never invent or assume data.
+    CRITICAL RULES:
+    - Your ONLY source of truth is the "Retrieved Data" section below. ALL numbers,
+      endpoints, error counts, and claims MUST come from this data.
+    - NEVER reference or reuse numbers, endpoints, or findings from the conversation
+      history. The history is only provided for conversational flow — treat each
+      question as an independent analysis against the Retrieved Data.
     - If "Retrieved Data" is empty or says "NO DATA FOUND", explicitly say no matching
       records were found and suggest what the user could try instead.
     - Be specific: use exact numbers, timestamps, and field values from the data.
@@ -304,6 +308,9 @@ class LogAgent:
         
         If jq_out is empty, the LLM is explicitly told no data was found
         to prevent hallucination.
+        
+        History is condensed into a brief topic summary to provide conversational
+        context without polluting the data interpretation.
         """
         # ── Hallucination guard ──
         is_empty = not jq_out or jq_out.strip() in ("", "null", "[]", "{}")
@@ -317,10 +324,28 @@ class LogAgent:
 
         system_prompt = _SYNTHESIS_SYSTEM + f"\n\n{domain_ctx}\n\n{id_map_ctx}"
 
+        # ── Condense history into a brief context summary ──
+        # Instead of injecting full Q&A pairs (which biases the LLM toward
+        # old data), we provide only a topic summary so the LLM understands
+        # conversational flow without confusing old data with new data.
+        history_summary = ""
+        if history:
+            topics = []
+            for msg in history:
+                if msg["role"] == "user":
+                    topics.append(msg["content"])
+            if topics:
+                recent = topics[-3:]  # Last 3 questions only
+                history_summary = (
+                    "\n\nConversation context (previous topics the user asked about — "
+                    "do NOT reuse any numbers or data from these, only use them to "
+                    "understand what the user is referring to):\n"
+                    + "\n".join(f"- {t}" for t in recent)
+                )
+
         messages: List[Dict[str, str]] = [
             {"role": "system", "content": system_prompt},
-            *history,
-            {"role": "user", "content": f"Question: {query}\n\nRetrieved Data:\n{data_section}"}
+            {"role": "user", "content": f"{history_summary}\n\nQuestion: {query}\n\nRetrieved Data:\n{data_section}"}
         ]
 
         resp = self.client.chat.completions.create(
