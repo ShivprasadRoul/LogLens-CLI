@@ -495,7 +495,71 @@ def clear_history(session: str = typer.Argument(..., help="Session name")) -> No
     console.print(f"[success]✓[/success] Cleared {hist['turns']} turn(s) from '[bold]{session}[/bold]'.")
 
 
-# ── config subcommands ────────────────────────────────────────────────────────
+# ── delete ────────────────────────────────────────────────────────────────────
+
+@app.command()
+def delete(
+    session: str = typer.Argument(..., help="Session name to delete"),
+    force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation prompt"),
+) -> None:
+    """Delete a session and all its cached data (schema, records, history)."""
+    session_dir = SESSIONS_DIR / session
+    if not session_dir.exists():
+        console.print(f"[error]Error:[/error] Session '{session}' not found.")
+        raise typer.Exit(1)
+
+    if not force:
+        confirm = console.input(
+            f"[warning]Delete session '[bold]{session}[/bold]' and all its data? (y/N): [/warning]"
+        )
+        if confirm.strip().lower() not in ("y", "yes"):
+            console.print("[muted]Cancelled.[/muted]")
+            return
+
+    import shutil
+    shutil.rmtree(session_dir)
+    console.print(f"[success]✓[/success] Deleted session '[bold]{session}[/bold]'.")
+
+
+# ── update ────────────────────────────────────────────────────────────────────
+
+@app.command()
+def update() -> None:
+    """Pull the latest LogLens code from GitHub (self-update)."""
+    import subprocess
+
+    install_dir = Path.home() / ".loglens" / "install" / "LogLens"
+    if not install_dir.exists():
+        console.print("[error]Error:[/error] LogLens install directory not found at ~/.loglens/install/LogLens")
+        console.print("[muted]If you installed from source, just run: git pull[/muted]")
+        raise typer.Exit(1)
+
+    console.print("[bold]Updating LogLens...[/bold]")
+    try:
+        result = subprocess.run(
+            ["git", "pull", "--ff-only"],
+            cwd=install_dir,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if result.returncode == 0:
+            console.print(f"[success]✓[/success] Updated successfully.")
+            if "Already up to date" in result.stdout:
+                console.print("[muted]Already on the latest version.[/muted]")
+            else:
+                console.print(f"[dim]{result.stdout.strip()}[/dim]")
+        else:
+            console.print(f"[error]Git pull failed:[/error] {result.stderr.strip()}")
+            raise typer.Exit(1)
+    except subprocess.TimeoutExpired:
+        console.print("[error]Error:[/error] Git pull timed out.")
+        raise typer.Exit(1)
+    except FileNotFoundError:
+        console.print("[error]Error:[/error] Git not found. Install git first.")
+        raise typer.Exit(1)
+
+
 
 @config_app.command(name="show")
 def config_show() -> None:
