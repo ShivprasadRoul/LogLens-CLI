@@ -93,29 +93,43 @@ class SkillRegistry:
     def get(self, name: str) -> Optional[Skill]:
         return self._skills.get(name)
 
-    def detect(self, schema_text: str, sample_values: str = "") -> Skill:
-        """Auto-detect the best matching skill from schema fields + sample values.
+    # Minimum ratio of top score a skill needs to be blended in
+    BLEND_THRESHOLD = 0.5
 
-        Scoring: count how many of the skill's signals appear in the combined text.
-        Generic skill is excluded from auto-detection (used only as fallback).
+    def detect(self, schema_text: str, sample_values: str = "") -> Skill:
+        """Auto-detect the best matching skill(s) from schema fields.
+
+        If multiple skills score within BLEND_THRESHOLD of the top score,
+        their domain_context and jq_hints are merged into a single composite
+        skill. This handles hybrid logs (e.g. app logs with HTTP fields).
+
         Returns the generic skill if nothing scores > 0.
         """
         combined = (schema_text + " " + sample_values).lower()
-        best_skill: Optional[Skill] = None
-        best_score = 0
 
+        scored: List[tuple] = []
         for skill in self._skills.values():
             if skill.name in _FALLBACK_SKILLS:
                 continue
             score = sum(1 for sig in skill.signals if sig.lower() in combined)
-            if score > best_score:
-                best_score = score
-                best_skill = skill
+            if score > 0:
+                scored.append((score, skill))
 
-        if best_skill is None or best_score == 0:
+        if not scored:
             return self._skills.get("generic") or _fallback_generic()
 
-        return best_skill
+        scored.sort(key=lambda x: x[0], reverse=True)
+        top_score = scored[0][0]
+        threshold = top_score * self.BLEND_THRESHOLD
+
+        # Collect all skills that scored above the blend threshold
+        blended = [skill for score, skill in scored if score >= threshold]
+
+        if len(blended) == 1:
+            return blended[0]
+
+        # Build a composite skill from all qualifying skills
+        return _blend_skills(blended)
 
     def install(self, source: Path) -> Skill:
         """Install a user skill from a TOML file into ~/.loglens/skills/."""
@@ -146,6 +160,59 @@ class SkillRegistry:
         self._skills.clear()
         self._load_all()
 
+
+# ── Skill blending ────────────────────────────────────────────────────────────
+
+def _blend_skills(skills: List[Skill]) -> Skill:
+    """Create a composite skill by merging domain_context and jq_hints
+    from multiple matching skills.
+    """
+    names = [s.name for s in skills]
+    blended_name = "+".join(names)
+
+    # Merge domain contexts with clear section headers
+    domain_parts = []
+    for s in skills:
+        if s.domain_context.strip():
+            domain_parts.append(
+                f"=== Skill: {s.name} ===\n{s.domain_context.strip()}"
+            )
+    merged_domain = "\n\n".join(domain_parts)
+
+    # Merge JQ hints
+    jq_parts = []
+    for s in skills:
+        if s.jq_hints.strip():
+            jq_parts.append(
+                f"=== JQ Hints from {s.name} ===\n{s.jq_hints.strip()}"
+            )
+    merged_jq = "\n\n".join(jq_parts)
+
+    # Merge all signals (deduplicate)
+    all_signals: List[str] = []
+    seen = set()
+    for s in skills:
+        for sig in s.signals:
+            if sig not in seen:
+                all_signals.append(sig)
+                seen.add(sig)
+
+    # Build a composite Skill object without a real TOML file
+    class _CompositeSkill:
+        pass
+
+    composite = _CompositeSkill()
+    composite.name           = blended_name
+    composite.description    = f"Blended skill: {', '.join(names)}"
+    composite.version        = "1.0.0"
+    composite.author         = "LogLens (auto-blended)"
+    composite.signals        = all_signals
+    composite.domain_context = merged_domain
+    composite.jq_hints       = merged_jq
+    composite.source_path    = Path("(blended)")
+    composite.is_user        = False
+
+    return composite  # type: ignore[return-value]
 
 # ── TOML parsing ──────────────────────────────────────────────────────────────
 
