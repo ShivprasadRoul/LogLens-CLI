@@ -10,6 +10,8 @@ from typing import Any, Dict, List, Optional, Tuple
 from pathlib import Path
 from openai import OpenAI
 
+from loglens import config as cfg
+
 _JQ_RULES = textwrap.dedent("""\
     ── JQ RULES (STRICT — DO NOT DEVIATE) ──
     Input:  A JSON array of log records.
@@ -77,15 +79,21 @@ class LogAgent:
 
     MAX_RETRIES = 3
 
-    def __init__(self, api_key: Optional[str] = None, model: str = "gpt-4o"):
-        """Initialize the agent with OpenAI client."""
-        self.api_key = api_key or os.getenv("OPENAI_API_KEY")
+    def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
+        """Initialize the agent.
+        
+        Reads api_key and model from ~/.loglens/config.json if not provided explicitly.
+        """
+        provider = cfg.get_active_provider()
+        self.api_key = api_key or cfg.get_api_key(provider) or os.getenv("OPENAI_API_KEY")
         if not self.api_key:
-            raise ValueError("OpenAI API key not found. Set OPENAI_API_KEY environment variable.")
-
+            raise ValueError(
+                f"No API key for provider '{provider}'. "
+                f"Run: loglens config set-key {provider} <key>"
+            )
+        self.model = model or cfg.get_model(provider)
         self.client = OpenAI(api_key=self.api_key)
-        self.model = model
-        self.max_jq_bytes = 200_000
+        self.max_jq_bytes = cfg.load().get("max_jq_bytes", 200_000)
 
     def query(self,
               session_dir: Path,
