@@ -1,0 +1,67 @@
+[meta]
+name        = "python_app"
+description = "Python application logs with tracebacks and exception info"
+version     = "1.0.0"
+author      = "LogLens"
+
+[detection]
+signals = [
+  "exc_info", "funcName", "pathname", "lineno",
+  "filename", "module", "stack_info",
+  "Traceback", "Exception", "Error", "line_no"
+]
+
+[prompts]
+domain_context = """
+DOMAIN: Python Application Logs (with Tracebacks)
+
+Python exception patterns to detect and surface:
+- Traceback blocks: multi-line records containing "Traceback (most recent call last)"
+- Exception types: the last line of a traceback (e.g. "ValueError: ...", "KeyError: ...")
+- The source location: file path + line number from the traceback
+- Chained exceptions: "The above exception was the direct cause of..."
+- Unhandled exceptions: appear at the root logger level, often CRITICAL
+
+Common exception categories and what they mean:
+- KeyError / AttributeError  → data contract violation (missing field, wrong type)
+- ValueError / TypeError     → input validation failure
+- ConnectionError / TimeoutError → external service unreachable
+- PermissionError / FileNotFoundError → filesystem/config issue
+- RuntimeError / AssertionError → logical bug in application code
+- MemoryError / RecursionError → resource exhaustion
+
+When answering:
+- Group exceptions by their TYPE (e.g. "KeyError") not by the full message
+- Show the source file + line number from the traceback
+- Count occurrences — a single exception type appearing repeatedly is a bug, not an incident
+- Show the most recent occurrence's full traceback for context
+- If exc_info contains "most recent call last", extract the exception class from the last line
+- Give a 1-line "Bottom line:" at the end
+"""
+
+jq_hints = """
+JQ HINTS for Python app logs:
+- Exception info:   .exc_info  (multi-line string with full traceback)
+- Source file:      .filename or .pathname
+- Function name:    .funcName
+- Line number:      .lineno or .line_no
+- Module:           .module
+- Logger:           .logger (Python logger name)
+- Level:            .level ("ERROR", "WARNING", "CRITICAL", etc.)
+- Message:          .message or .msg
+- Thread:           .thread or .threadName
+- Timestamp:        .timestamp or .written_at
+
+Common queries:
+  # All records with exception tracebacks
+  map(select(.exc_info != null and .exc_info != ""))
+
+  # Group exceptions by type (extract last line of traceback)
+  map(select(.exc_info != null)) | map(.exc_info | split("\\n") | map(select(length > 0)) | last) | group_by(.) | map({exception: .[0], count: length}) | sort_by(.count) | reverse
+
+  # Exceptions from a specific file
+  map(select(.filename | test("services/auth"; "i")))
+
+  # Most recent traceback
+  map(select(.exc_info != null)) | sort_by(.timestamp) | last | .exc_info
+"""

@@ -1,0 +1,65 @@
+[meta]
+name        = "nginx_error"
+description = "Nginx error logs"
+version     = "1.0.0"
+author      = "LogLens"
+
+[detection]
+signals = [
+  "severity", "upstream", "client", "server",
+  "host", "pid", "tid", "connection",
+  "upstream_addr", "upstream_status", "upstream_response_time"
+]
+
+[prompts]
+domain_context = """
+DOMAIN: Nginx Error Logs
+
+Severity levels (Nginx-specific):
+- emerg  → system is unusable; Nginx may have crashed
+- alert  → immediate action required
+- crit   → critical conditions (disk full, socket errors)
+- error  → errors that prevented request processing
+- warn   → recoverable issues (upstream retries, slow connections)
+- notice → normal but significant events (worker process start/stop)
+- info   → informational; usually not actionable
+- debug  → very verbose; only useful for specific debugging
+
+Patterns to detect and flag:
+- "connect() failed" → upstream service unreachable (backend down)
+- "upstream timed out" → backend responding too slowly (latency issue)
+- "no live upstreams" → all backend servers in a pool are down → CRITICAL
+- "connection refused" → backend port not listening
+- "too many open files" → file descriptor limit hit → CRITICAL
+- "recv() failed" → network interruption mid-request
+- "SSL handshake failed" → TLS configuration issue
+- worker process respawning frequently → memory leak or OOM kill
+
+When answering:
+- Group by error message pattern (strip dynamic parts like IPs/ports)
+- Show affected upstream addresses when present
+- Correlate error timestamps with access log time windows if possible
+- Distinguish worker failures from upstream failures from client errors
+- Give a 1-line "Bottom line:" at the end
+"""
+
+jq_hints = """
+JQ HINTS for Nginx error logs:
+- Severity:       .severity or .level  ("error", "warn", "crit", "emerg")
+- Message:        .message
+- Upstream:       .upstream (upstream server address, e.g. "127.0.0.1:8080")
+- Client IP:      .client
+- Server:         .server (virtual host)
+- PID/TID:        .pid, .tid
+- Timestamp:      .timestamp
+
+Common queries:
+  # All critical/emergency errors
+  map(select(.severity | test("crit|emerg|alert"; "i")))
+
+  # Upstream timeout count by upstream server
+  map(select(.message | test("timed out"; "i"))) | group_by(.upstream) | map({upstream: .[0].upstream, count: length}) | sort_by(.count) | reverse
+
+  # Connection refused errors
+  map(select(.message | test("connection refused"; "i"))) | map({upstream: .upstream, time: .timestamp, msg: .message})
+"""

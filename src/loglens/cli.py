@@ -30,6 +30,7 @@ from rich.theme import Theme
 # Local imports
 from loglens import config as cfg
 from loglens import memory
+from loglens import skills as skill_mod
 from loglens.agent import LogAgent
 from loglens.id_map import IDMapper
 from loglens.parser import LogParser
@@ -82,7 +83,9 @@ app = typer.Typer(
     rich_markup_mode="rich",
 )
 config_app = typer.Typer(help="Manage LogLens config (API keys, provider, model).")
+skills_app = typer.Typer(help="Manage LogLens skills (domain knowledge plugins).")
 app.add_typer(config_app, name="config")
+app.add_typer(skills_app, name="skills")
 
 SESSIONS_DIR = Path(".loglens/sessions")
 
@@ -102,6 +105,7 @@ def _print_answer(result: dict, show_jq: bool = False) -> None:
     answer_md = Markdown(result["answer"])
     passes = result["attempts"]
     model  = cfg.get_model()
+    skill  = result.get("skill", "?")
     jq     = result.get("jq_program", "")
 
     # Main answer panel
@@ -112,11 +116,13 @@ def _print_answer(result: dict, show_jq: bool = False) -> None:
         padding=(1, 2),
     ))
 
-    # Footer row — passes + model
+    # Footer row — passes + model + skill
     footer = Text()
     footer.append(f" {passes} retrieval pass{'es' if passes != 1 else ''}", style="muted")
     footer.append("  ·  ", style="muted")
     footer.append(f"model: {model}", style="muted")
+    footer.append("  ·  ", style="muted")
+    footer.append(f"skill: {skill}", style="muted")
     console.print(footer)
 
     # Optional JQ block
@@ -270,6 +276,7 @@ def query(
     question: str = typer.Option(..., "--query", "-q", help="Question in plain English"),
     show_jq: bool = typer.Option(False, "--show-jq", help="Print the generated JQ program"),
     save_history: bool = typer.Option(True, "--save-history/--no-history", help="Save this Q&A to session history"),
+    skill: Optional[str] = typer.Option(None, "--skill", help="Force a specific skill (e.g. nginx_access)"),
 ) -> None:
     """Ask a one-off question about an ingested log session."""
     session_dir = _require_session(session)
@@ -283,7 +290,7 @@ def query(
 
     with console.status("[bold green]Analyzing logs...[/bold green]", spinner="dots"):
         try:
-            result = agent.query(session_dir, question, history=hist)
+            result = agent.query(session_dir, question, history=hist, forced_skill=skill)
         except Exception as e:
             console.print(f"[error]Error:[/error] {e}")
             raise typer.Exit(1)
@@ -300,6 +307,7 @@ def query(
 def chat(
     session: str = typer.Argument(..., help="Session name"),
     show_jq: bool = typer.Option(False, "--show-jq", help="Print the generated JQ program after each answer"),
+    skill: Optional[str] = typer.Option(None, "--skill", help="Force a specific skill (e.g. nginx_access)"),
 ) -> None:
     """Start an interactive chat session with persistent memory."""
     session_dir = _require_session(session)
@@ -338,7 +346,7 @@ def chat(
 
         with console.status("[bold green]Thinking...[/bold green]", spinner="dots"):
             try:
-                result = agent.query(session_dir, q, history=windowed_history)
+                result = agent.query(session_dir, q, history=windowed_history, forced_skill=skill)
             except Exception as e:
                 console.print(f"[error]Error:[/error] {e}")
                 continue
@@ -497,6 +505,91 @@ def config_set_model(
     cfg.set_model(model)
     provider = cfg.get_active_provider()
     console.print(f"[success]✓[/success] Model → [bold]{model}[/bold] for [bold]{provider}[/bold].")
+
+
+# ── skills subcommands ────────────────────────────────────────────────────────
+
+@skills_app.command(name="list")
+def skills_list() -> None:
+    """List all available skills (built-in and user-installed)."""
+    registry = skill_mod.get_registry()
+    skills = registry.all()
+
+    table = Table(
+        title="LogLens Skills",
+        header_style="bold blue",
+        border_style="dim",
+        box=box.ROUNDED,
+    )
+    table.add_column("Name", style="bold cyan")
+    table.add_column("Type")
+    table.add_column("Description")
+    table.add_column("Signals")
+
+    for skill in sorted(skills, key=lambda s: s.name):
+        tag = "[green]User[/green]" if skill.is_user else "[muted]Built-in[/muted]"
+        sigs = ", ".join(skill.signals[:5])
+        if len(skill.signals) > 5:
+            sigs += "..."
+        table.add_row(skill.name, tag, skill.description, f"[dim]{sigs}[/dim]")
+
+    console.print(table)
+
+
+@skills_app.command(name="show")
+def skills_show(name: str = typer.Argument(..., help="Skill name")) -> None:
+    """Print the full configuration of a skill."""
+    registry = skill_mod.get_registry()
+    skill = registry.get(name)
+    if not skill:
+        console.print(f"[error]Error:[/error] Skill '{name}' not found.")
+        raise typer.Exit(1)
+
+    tag = "[green]User[/green]" if skill.is_user else "[muted]Built-in[/muted]"
+    console.print(f"\n[bold blue]Skill: {skill.name}[/bold blue]  ({tag})\n")
+    console.print(f"[bold]Description:[/bold] {skill.description}")
+    console.print(f"[bold]Author:[/bold]      {skill.author} (v{skill.version})")
+    console.print(f"[bold]Source:[/bold]      [dim]{skill.source_path}[/dim]")
+    console.print(f"\n[bold]Signals:[/bold]     {', '.join(skill.signals)}")
+
+    console.print(Rule("Domain Context", style="dim"))
+    console.print(skill.domain_context)
+
+    console.print(Rule("JQ Hints", style="dim"))
+    console.print(skill.jq_hints)
+    console.print()
+
+
+@skills_app.command(name="add")
+def skills_add(file_path: Path = typer.Argument(..., help="Path to the custom .toml skill file")) -> None:
+    """Install a custom skill from a TOML file."""
+    if not file_path.exists():
+        console.print(f"[error]Error:[/error] File not found: {file_path}")
+        raise typer.Exit(1)
+
+    registry = skill_mod.get_registry()
+    try:
+        skill = registry.install(file_path)
+        console.print(f"[success]✓[/success] Installed skill '[bold cyan]{skill.name}[/bold cyan]' "
+                      f"from {file_path.name}.")
+    except Exception as e:
+        console.print(f"[error]Error installing skill:[/error] {e}")
+        raise typer.Exit(1)
+
+
+@skills_app.command(name="remove")
+def skills_remove(name: str = typer.Argument(..., help="Skill name to remove")) -> None:
+    """Remove a user-installed skill."""
+    registry = skill_mod.get_registry()
+    try:
+        registry.remove(name)
+        console.print(f"[success]✓[/success] Removed skill '[bold cyan]{name}[/bold cyan]'.")
+    except KeyError as e:
+        console.print(f"[error]Error:[/error] {e}")
+        raise typer.Exit(1)
+    except PermissionError as e:
+        console.print(f"[error]Error:[/error] {e}")
+        raise typer.Exit(1)
 
 
 if __name__ == "__main__":

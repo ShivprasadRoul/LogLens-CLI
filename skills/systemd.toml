@@ -1,0 +1,65 @@
+[meta]
+name        = "systemd"
+description = "systemd / journald service logs"
+version     = "1.0.0"
+author      = "LogLens"
+
+[detection]
+signals = [
+  "UNIT", "PRIORITY", "SYSLOG_IDENTIFIER",
+  "SYSTEMD_UNIT", "_SYSTEMD_UNIT", "INVOCATION_ID",
+  "_PID", "_UID", "_HOSTNAME", "_TRANSPORT",
+  "MESSAGE", "__REALTIME_TIMESTAMP"
+]
+
+[prompts]
+domain_context = """
+DOMAIN: systemd / journald Logs
+
+Priority levels (syslog numeric scale):
+- 0 emerg   → kernel panic / system unusable
+- 1 alert   → immediate action required
+- 2 crit    → hardware failure, disk full
+- 3 err     → service error, failed units
+- 4 warning → service degraded or retrying
+- 5 notice  → service started / stopped / reloaded
+- 6 info    → normal operation
+- 7 debug   → verbose debugging
+
+Critical patterns to detect:
+- "Failed to start" / "failed with result" → unit start failure
+- "Reached target" missing in sequence → dependency failure
+- "Start request repeated too quickly" → crash-loop (restart loop)
+- "Main process exited" with non-zero code → application crash
+- "OOM" / "killed" → out-of-memory kill
+- "segfault" → native crash
+- "Could not activate remote peer" → DBus dependency failure
+- Multiple "restarted" events for same unit → instability
+
+When answering:
+- Always identify the UNIT name (e.g. "nginx.service", "postgresql.service")
+- For crashes: show exit code and signal if available
+- For restart loops: count restart events and show time range
+- Surface dependency chain: if unit A failed causing unit B to fail
+- Give a 1-line "Bottom line:" at the end
+"""
+
+jq_hints = """
+JQ HINTS for systemd/journald logs:
+- Service unit:   .UNIT or ._SYSTEMD_UNIT or .SYSLOG_IDENTIFIER
+- Priority:       .PRIORITY (integer string: "0"=emerg ... "7"=debug)
+- Message:        .MESSAGE or .message
+- PID:            ._PID
+- Hostname:       ._HOSTNAME
+- Timestamp:      .timestamp or .__REALTIME_TIMESTAMP (microseconds since epoch as string)
+
+Common queries:
+  # All error-level or worse events (priority 0-3)
+  map(select(.PRIORITY != null and (.PRIORITY | tonumber) <= 3))
+
+  # Failed unit starts
+  map(select(.MESSAGE | test("failed to start|failed with result"; "i")))
+
+  # Crash-loop detection: units restarted more than 3 times
+  map(select(.MESSAGE | test("started|restarted"; "i"))) | group_by(.UNIT) | map({unit: .[0].UNIT, restarts: length}) | map(select(.restarts > 3)) | sort_by(.restarts) | reverse
+"""

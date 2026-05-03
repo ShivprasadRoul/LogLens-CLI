@@ -1,0 +1,69 @@
+[meta]
+name        = "nginx_access"
+description = "Nginx / Apache HTTP access logs"
+version     = "1.0.0"
+author      = "LogLens"
+
+[detection]
+signals = [
+  "request", "method", "remote_ip", "remote_host",
+  "response_status", "response_size_b", "response_time_ms",
+  "referer", "x_forwarded_for", "protocol",
+  "upstream_time", "request_size_b", "remote_port"
+]
+
+[prompts]
+domain_context = """
+DOMAIN: HTTP Access Logs (Nginx / Apache)
+
+HTTP status code thresholds to flag:
+- 5xx (500–599): Server errors → CRITICAL if rate > 1% of requests
+- 4xx (400–499): Client errors → flag if 404 rate > 5% (missing routes) or 401/403 rate spikes (auth issues)
+- 3xx (300–399): Redirects → flag if excessive (redirect loop risk)
+- 2xx (200–299): Success → use as baseline for comparison
+
+Latency thresholds:
+- response_time_ms > 2000ms → slow (flag with endpoint name)
+- response_time_ms > 5000ms → critical (flag immediately)
+- Average latency spike → compare to median to find outlier endpoints
+
+Traffic patterns:
+- Top endpoints by request volume → identifies hot paths
+- Endpoints with high error rate (5xx count / total count) → reliability risk
+- High bandwidth endpoints (sum of response_size_b) → CDN/caching candidates
+- Unusual IPs with high request counts → potential abuse or bot traffic
+
+When answering:
+- Always show endpoint path AND method together (e.g. "POST /api/v1/upload")
+- Express error rates as percentage (e.g. "3.2% of requests returned 5xx")
+- For latency queries, show P50/P90 if possible, or at minimum avg + max
+- For IP-based queries, aggregate by /24 subnet if individual IP count is high
+- Give a 1-line "Bottom line:" at the end
+"""
+
+jq_hints = """
+JQ HINTS for Nginx/Apache access logs:
+- HTTP method:       .method  ("GET", "POST", "PUT", "DELETE", etc.)
+- Request path:      .request (full path, e.g. "/api/v1/users?page=1")
+- Status code:       .response_status  (integer, e.g. 200, 404, 500)
+- Response time:     .response_time_ms (integer, milliseconds)
+- Response size:     .response_size_b  (string or integer, bytes)
+- Client IP:         .remote_ip
+- Timestamp:         .timestamp or .request_received_at (ISO 8601)
+- Protocol:          .protocol ("HTTP/1.1", "HTTP/2.0")
+- Referer:           .referer
+- Forwarded IP:      .x_forwarded_for
+
+Common queries:
+  # Top 10 endpoints by request count
+  group_by(.request) | map({endpoint: .[0].request, method: .[0].method, count: length}) | sort_by(.count) | reverse | limit(10; .[])
+
+  # All 5xx errors
+  map(select(.response_status >= 500))
+
+  # Slowest 10 requests
+  map(select(.response_time_ms != null)) | sort_by(.response_time_ms) | reverse | limit(10; .[]) | map({request: .request, method: .method, ms: .response_time_ms, status: .response_status})
+
+  # Error rate per endpoint
+  group_by(.request) | map({endpoint: .[0].request, total: length, errors: (map(select(.response_status >= 500)) | length)}) | map(. + {error_pct: ((.errors / .total) * 100 | round)}) | sort_by(.error_pct) | reverse | limit(10; .[])
+"""

@@ -1,0 +1,55 @@
+[meta]
+name        = "generic"
+description = "Generic fallback skill for unknown log formats"
+version     = "1.0.0"
+author      = "LogLens"
+
+[detection]
+# Generic matches everything — lowest priority, used as final fallback
+signals = ["level", "message", "timestamp", "raw"]
+
+[prompts]
+domain_context = """
+DOMAIN: General Logs (Unknown Format)
+
+Since the log format hasn't been specifically identified, apply conservative, broad analysis:
+
+Treat these fields as severity indicators (in descending order):
+- .level or .severity field values: "ERROR" > "WARNING" > "INFO" > "DEBUG"
+- If no level field: look for keywords in .message — "error", "fail", "exception", "critical"
+
+General patterns to surface:
+- Records with error-like messages or high severity
+- Repeated identical messages (potential loops or retries)
+- Time-clustered events (many records within a short window)
+- Any fields containing numeric values that could indicate metrics (counts, durations, sizes)
+
+When answering:
+- State upfront that the log format was not specifically recognized
+- Still provide the best analysis possible from available fields
+- Recommend the user try: loglens ingest <file> --skill <name> if they know the format
+- Avoid making assumptions about field semantics that aren't supported by the data
+- Give a 1-line "Bottom line:" at the end
+"""
+
+jq_hints = """
+JQ HINTS for generic/unknown log formats:
+- Try .level, .severity, .priority, .lvl for severity
+- Try .message, .msg, .text, .body for the log message
+- Try .timestamp, .time, .ts, .datetime, .written_at for time
+- Try .source, .service, .logger, .app for the originating component
+- Raw line: .raw (always present — contains original unparsed text)
+
+Conservative queries:
+  # Get all unique field names to understand schema
+  map(keys) | flatten | unique
+
+  # Get a sample of 5 records to inspect structure
+  limit(5; .[])
+
+  # Find records with error-like messages
+  map(select(.message | test("error|fail|exception|critical"; "i")))
+
+  # Count by level field (if it exists)
+  map(select(has("level"))) | group_by(.level) | map({level: .[0].level, count: length}) | sort_by(.count) | reverse
+"""

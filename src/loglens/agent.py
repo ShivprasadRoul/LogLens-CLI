@@ -11,6 +11,7 @@ from pathlib import Path
 from openai import OpenAI
 
 from loglens import config as cfg
+from loglens import skills as skill_mod
 
 _JQ_RULES = textwrap.dedent("""\
     ── JQ RULES (STRICT — DO NOT DEVIATE) ──
@@ -98,20 +99,32 @@ class LogAgent:
     def query(self,
               session_dir: Path,
               query_text: str,
-              history: Optional[List[Dict[str, str]]] = None) -> Dict[str, Any]:
+              history: Optional[List[Dict[str, str]]] = None,
+              forced_skill: Optional[str] = None) -> Dict[str, Any]:
         """Orchestrate the two-pass retrieval and synthesis."""
         history = history or []
 
         # Load session context
-        schema_path = session_dir / "schema.json"
-        id_map_path = session_dir / "id_map.json"
+        schema_path  = session_dir / "schema.json"
+        id_map_path  = session_dir / "id_map.json"
         records_path = session_dir / "records.json"
 
         with open(schema_path, "r") as f:
             schema_data = json.load(f)
 
         schema_text = self._format_schema(schema_data.get("fields", {}))
-        domain_context = self._get_domain_context(schema_text)
+
+        # ── Skill detection ──
+        registry = skill_mod.get_registry()
+        if forced_skill:
+            skill = registry.get(forced_skill)
+            if not skill:
+                raise ValueError(f"Skill '{forced_skill}' not found. Run: loglens skills list")
+        else:
+            skill = registry.detect(schema_text)
+
+        domain_context = skill.domain_context
+        jq_hints       = skill.jq_hints
 
         id_map_summary = ""
         if id_map_path.exists():
@@ -121,17 +134,18 @@ class LogAgent:
 
         # Two-Pass Retrieval
         jq_out, jq_prog, attempts = self._two_pass_retrieval(
-            records_path, schema_text, query_text, domain_context, id_map_summary
+            records_path, schema_text, query_text, domain_context, id_map_summary, jq_hints
         )
 
         # Synthesis — with hallucination guard
         answer = self._synthesize(query_text, jq_out, domain_context, id_map_summary, history)
 
         return {
-            "answer": answer,
+            "answer":   answer,
             "jq_program": jq_prog,
             "attempts": attempts,
-            "raw_data": jq_out
+            "raw_data": jq_out,
+            "skill":    skill.name,
         }
 
     # ── Pass 1: Explore to confirm field names ────────────────────────────────
@@ -141,7 +155,8 @@ class LogAgent:
                             schema_text: str,
                             query: str,
                             domain_ctx: str,
-                            id_map_ctx: str) -> Tuple[str, str, int]:
+                            id_map_ctx: str,
+                            jq_hints: str = "") -> Tuple[str, str, int]:
         """Pass 1: Explore — confirm real field names via sample.
            Pass 2: Extract — precise query with retry loop."""
 
@@ -150,7 +165,7 @@ class LogAgent:
             f"Sample 3 records most relevant to this query: '{query}'. "
             f"Include all fields. Do not filter by time yet — just show raw examples."
         )
-        explore_jq, _ = self._generate_jq(schema_text, explore_query, domain_ctx, "")
+        explore_jq, _ = self._generate_jq(schema_text, explore_query, domain_ctx, "", jq_hints=jq_hints)
         sample_out, sample_err = self._run_jq(explore_jq, records_path)
 
         sample_context = ""
@@ -175,7 +190,8 @@ class LogAgent:
             total_attempts += 1
             precise_jq, _ = self._generate_jq(
                 schema_text, query, domain_ctx, combined_ctx,
-                prev_attempts=prev_attempts
+                prev_attempts=prev_attempts,
+                jq_hints=jq_hints,
             )
             final_out, err = self._run_jq(precise_jq, records_path)
 
@@ -199,15 +215,18 @@ class LogAgent:
                      query: str,
                      domain_ctx: str,
                      extra_ctx: str,
-                     prev_attempts: Optional[List[Dict[str, str]]] = None) -> Tuple[str, int]:
+                     prev_attempts: Optional[List[Dict[str, str]]] = None,
+                     jq_hints: str = "") -> Tuple[str, int]:
         """Generate a JQ program using the LLM. Returns (jq_program, token_count)."""
+
+        hints_block = f"\n\nSkill JQ Hints:\n{jq_hints}" if jq_hints else ""
 
         system_prompt = textwrap.dedent(f"""\
             You are an expert jq programmer and log analyst.
 
             {domain_ctx}
 
-            {_JQ_RULES}
+            {_JQ_RULES}{hints_block}
         """)
 
         user_content = (
@@ -332,16 +351,6 @@ class LogAgent:
             lines.append(f"  - {field}: e.g. {', '.join(sample_ids)}")
         return "\n".join(lines)
 
-    def _get_domain_context(self, schema_text: str) -> str:
-        """Simple domain detection — inspects schema field names."""
-        if "usability_score" in schema_text or "miss_clicks" in schema_text:
-            return "DOMAIN: UX Prototype Testing. Focus on usability scores, miss clicks, and drop-offs."
-        if "response_status" in schema_text or "remote_ip" in schema_text:
-            return (
-                "DOMAIN: API/Web Server Logs.\n"
-                "Key fields: request (endpoint path), method, response_status (HTTP code), "
-                "response_time_ms (latency), remote_ip, correlation_id, timestamp.\n"
-                "Focus on: error rates (response_status >= 400), slow endpoints (high response_time_ms), "
-                "and correlating requests to application logs via correlation_id."
-            )
-        return "DOMAIN: General Application Logs."
+    def _get_domain_context(self, schema_text: str) -> str:  # kept for backward compat
+        """Deprecated — skill detection is now done in query(). Kept for compatibility."""
+        return skill_mod.detect_skill(schema_text).domain_context

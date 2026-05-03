@@ -1,0 +1,63 @@
+[meta]
+name        = "app_logs"
+description = "Generic Python / Node.js / Java application logs"
+version     = "1.0.0"
+author      = "LogLens"
+
+[detection]
+signals = [
+  "level", "logger", "message", "severity",
+  "correlation_id", "written_at", "exc_info",
+  "thread", "module", "line_no"
+]
+
+[prompts]
+domain_context = """
+DOMAIN: Application Logs (Python / Node / Java / Generic)
+
+Key severity levels and what to flag:
+- CRITICAL / FATAL  → immediate action required; service may be down
+- ERROR             → request/operation failed; always surface with count + logger
+- WARNING           → degraded state; surface if rate is high (>10% of records)
+- INFO              → normal operation; use only for context, not as finding
+- DEBUG             → noise for most queries; only include if explicitly asked
+
+Patterns to detect and surface:
+- Exception spikes: sudden jump in ERROR count from a logger within a time window
+- Cascading failures: one logger's ERRORs immediately preceding another's (correlation_id links them)
+- Repeated identical messages: same error message appearing > 5 times → likely a loop
+- Slow background jobs: WARNING messages containing "timeout", "retry", "slow", "exceeded"
+- Auth failures: messages containing "unauthorized", "forbidden", "token", "jwt"
+
+When answering:
+- Always group by logger name (e.g. "src.services.auth") — not by raw message
+- Show exact error counts and the earliest + latest timestamps for the time window
+- If correlation_id is present, mention it — the user can drill down with: loglens query <session> -q "trace correlation_id <id>"
+- Flag if ERROR rate exceeds 5% of total records as a critical threshold
+- Give a 1-line "Bottom line:" at the end
+"""
+
+jq_hints = """
+JQ HINTS for application logs:
+- Level field:      .level  (values: "ERROR", "WARNING", "INFO", "DEBUG", "CRITICAL")
+- Logger field:     .logger (dot-separated module path, e.g. "src.services.auth")
+- Message field:    .message (normalized) or .msg (raw)
+- Timestamp field:  .timestamp (ISO 8601) or .written_at
+- Correlation ID:   .correlation_id (UUID string)
+- Exception info:   .exc_info (multiline string)
+- Thread:           .thread
+- Source location:  .module, .line_no, .filename
+
+Common queries:
+  # Top 5 loggers by ERROR count
+  map(select(.level == "ERROR")) | group_by(.logger) | map({logger: .[0].logger, count: length}) | sort_by(.count) | reverse | limit(5; .[])
+
+  # All records from a specific correlation_id
+  map(select(.correlation_id == "TARGET_ID"))
+
+  # Errors in the last N hours (replace cutoff with actual timestamp from data)
+  map(select(.level == "ERROR" and .timestamp >= "2026-04-29T15:00:00Z"))
+
+  # Unique exception types
+  map(select(.exc_info != null)) | map(.exc_info | split("\\n")[0]) | unique
+"""
