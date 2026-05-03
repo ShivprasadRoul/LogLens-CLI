@@ -219,7 +219,7 @@ Everything LogLens computes is cached under `.loglens/sessions/<name>/`:
       id_map.json      ← entity ID → name lookup
       meta.json        ← domain, record count, last updated
       history.json     ← full conversation memory
-      log_data.json    ← parsed structured JSON
+      records.json     ← parsed structured JSON
 ```
 
 Schema and ID map are computed **once** on `ingest` and reused for every query. Run `loglens refresh <session>` if your log file changes.
@@ -230,12 +230,12 @@ Schema and ID map are computed **once** on `ingest` and reused for every query. 
 
 LogLens is **BYOK** (Bring Your Own Key) — you supply the API key, LogLens never proxies or manages keys on your behalf. Keys are stored in `~/.loglens/config.json` with `600` permissions.
 
-| Provider | Models | Environment fallback |
-|---|---|---|
-| Anthropic | claude-opus-4-5, claude-sonnet-4-5, claude-haiku-4-5 | `ANTHROPIC_API_KEY` |
-| OpenAI | gpt-4o, gpt-4o-mini, gpt-4-turbo | `OPENAI_API_KEY` |
-| Groq | llama-3.3-70b, mixtral-8x7b | `GROQ_API_KEY` |
-| Gemini | gemini-1.5-pro, gemini-1.5-flash | `GEMINI_API_KEY` |
+| Provider | Default Model | All Available Models | Env Fallback |
+|---|---|---|---|
+| **OpenAI** | `gpt-4o` | `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.4-nano`, `gpt-5`, `gpt-5.2`, `gpt-5.1`, `gpt-5-mini`, `gpt-5-nano`, `gpt-4.1`, `gpt-4o`, `gpt-4o-mini` | `OPENAI_API_KEY` |
+| **Anthropic** | `claude-opus-4-5` | `claude-opus-4-5`, `claude-sonnet-4-5`, `claude-haiku-3-5` | `ANTHROPIC_API_KEY` |
+| **Groq** | `llama-3.3-70b-versatile` | `llama-3.3-70b-versatile`, `llama-3.1-8b-instant`, `mixtral-8x7b-32768` | `GROQ_API_KEY` |
+| **Gemini** | `gemini-1.5-pro` | `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-1.5-pro`, `gemini-1.5-flash` | `GEMINI_API_KEY` |
 
 If a key isn't in config, LogLens falls back to the corresponding environment variable automatically.
 
