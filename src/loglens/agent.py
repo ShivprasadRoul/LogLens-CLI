@@ -186,7 +186,147 @@ class LogAgent:
             "skill":    skill.name,
         }
 
-    # ── Pass 1: Explore to confirm field names ────────────────────────────────
+    def briefing(self,
+                 session_dir: Path,
+                 forced_skill: Optional[str] = None) -> Dict[str, Any]:
+        """Run fast JQ scans at chat startup to surface key insights.
+
+        No LLM call — pure JQ analysis. Returns:
+          - total_records: int
+          - error_count: int (4xx + 5xx)
+          - error_5xx_count: int
+          - failing_endpoints: list of {endpoint, method, errors}
+          - recent_failure: dict or None
+          - slow_endpoints: list of {endpoint, avg_ms}
+          - skill: str
+          - suggestions: list of question strings
+        """
+        import subprocess
+
+        schema_path  = session_dir / "schema.json"
+        records_path = session_dir / "records.json"
+
+        if not records_path.exists():
+            return {}
+
+        with open(schema_path, "r") as f:
+            schema_data = json.load(f)
+        schema_text = self._format_schema(schema_data.get("fields", {}))
+
+        registry = skill_mod.get_registry()
+        skill = (
+            registry.get(forced_skill)
+            if forced_skill
+            else registry.detect(schema_text)
+        )
+
+        def _jq(prog: str) -> str:
+            try:
+                r = subprocess.run(
+                    ["jq", "-c", prog, str(records_path)],
+                    capture_output=True, text=True, timeout=15
+                )
+                return r.stdout.strip()
+            except Exception:
+                return ""
+
+        # ── Scan 1: Total records ──
+        total_raw = _jq("length")
+        total = int(total_raw) if total_raw.isdigit() else 0
+
+        # ── Scan 2: Error counts (needs response_status field) ──
+        has_status = "response_status" in schema_text
+        has_level  = "level" in schema_text
+
+        error_count  = 0
+        error_5xx    = 0
+        if has_status:
+            cnt_raw = _jq("map(select(.response_status? >= 400)) | length")
+            error_count = int(cnt_raw) if cnt_raw.isdigit() else 0
+            cnt5_raw = _jq("map(select(.response_status? >= 500)) | length")
+            error_5xx = int(cnt5_raw) if cnt5_raw.isdigit() else 0
+        elif has_level:
+            cnt_raw = _jq('map(select(.level? == "ERROR" or .level? == "CRITICAL")) | length')
+            error_count = int(cnt_raw) if cnt_raw.isdigit() else 0
+
+        # ── Scan 3: Failing endpoints ──
+        failing_endpoints = []
+        if has_status:
+            fe_raw = _jq(
+                'map(select(.response_status? >= 400 and .request? != null))'
+                ' | group_by(.request)'
+                ' | map({endpoint: .[0].request, method: .[0].method,'
+                '        errors: length, sample_status: .[0].response_status})'
+                ' | sort_by(.errors) | reverse | limit(3; .[])'
+            )
+            if fe_raw:
+                import json as _json
+                try:
+                    for line in fe_raw.splitlines():
+                        failing_endpoints.append(_json.loads(line))
+                except Exception:
+                    pass
+
+        # ── Scan 4: Most recent failure ──
+        recent_failure = None
+        if has_status:
+            rf_raw = _jq(
+                'map(select(.response_status? >= 500 and .request? != null))'
+                ' | sort_by(.timestamp?) | last'
+            )
+            if rf_raw and rf_raw not in ("null", ""):
+                import json as _json
+                try:
+                    recent_failure = _json.loads(rf_raw)
+                except Exception:
+                    pass
+
+        # ── Scan 5: Slow endpoints (if response_time_ms exists) ──
+        slow_endpoints = []
+        if "response_time_ms" in schema_text and has_status:
+            slow_raw = _jq(
+                'map(select(.response_time_ms? != null and .request? != null))'
+                ' | group_by(.request)'
+                ' | map({'
+                '    endpoint: .[0].request,'
+                '    avg_ms: (map(.response_time_ms | tonumber) | add / length | floor)'
+                '  })'
+                ' | sort_by(.avg_ms) | reverse | limit(3; .[])'
+            )
+            if slow_raw:
+                import json as _json
+                try:
+                    for line in slow_raw.splitlines():
+                        slow_endpoints.append(_json.loads(line))
+                except Exception:
+                    pass
+
+        # ── Build smart suggestions ──
+        suggestions = []
+        if failing_endpoints:
+            ep = failing_endpoints[0]["endpoint"].split("/")[-1]
+            suggestions.append(f"why did {ep} api fail?")
+        if error_5xx > 0:
+            suggestions.append("show me all server errors")
+        if slow_endpoints:
+            ep = slow_endpoints[0]["endpoint"].split("/")[-1]
+            suggestions.append(f"why is {ep} so slow?")
+        if failing_endpoints and len(failing_endpoints) > 1:
+            suggestions.append("which endpoint is most unstable?")
+        if not suggestions:
+            suggestions = ["show recent errors", "what failed in the last hour?"]
+
+        return {
+            "total":             total,
+            "error_count":       error_count,
+            "error_5xx":         error_5xx,
+            "failing_endpoints": failing_endpoints,
+            "recent_failure":    recent_failure,
+            "slow_endpoints":    slow_endpoints,
+            "skill":             skill.name,
+            "suggestions":       suggestions[:4],
+        }
+
 
     def _two_pass_retrieval(self,
                             records_path: Path,

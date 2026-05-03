@@ -324,6 +324,82 @@ def chat(
 
     if hist_summary["turns"] > 0:
         console.print(f"[muted]↩  Resuming — {hist_summary['turns']} previous turn(s) in memory.[/muted]\n")
+    else:
+        # ── Auto-briefing on fresh session ──
+        with console.status("[dim]Scanning logs...[/dim]", spinner="dots"):
+            try:
+                brief = agent.briefing(session_dir, forced_skill=skill)
+            except Exception:
+                brief = {}
+
+        if brief:
+            # Build metadata line
+            meta = session_dir / "metadata.json"
+            file_info = ""
+            if meta.exists():
+                import json as _j
+                m = _j.loads(meta.read_text())
+                size_mb = m.get("size_bytes", 0) / 1_048_576
+                file_info = f"[dim]{m.get('source_filename', session)}[/dim]  [muted]({size_mb:.1f} MB)[/muted]"
+
+            lines = []
+            lines.append(f"  Loaded: {file_info or session}  ·  [bold]{brief['total']:,}[/bold] records  ·  skill: [cyan]{brief['skill']}[/cyan]")
+            lines.append("")
+
+            # Error summary
+            if brief["error_count"] > 0:
+                lines.append(f"  [bold]Detected:[/bold]")
+                if brief["error_5xx"] > 0:
+                    lines.append(f"    [red]⚠  {brief['error_5xx']} server errors (5xx)[/red]")
+                if brief["error_count"] - brief["error_5xx"] > 0:
+                    lines.append(f"    [yellow]⚠  {brief['error_count'] - brief['error_5xx']} client errors (4xx)[/yellow]")
+                if brief["failing_endpoints"]:
+                    lines.append(f"    [dim]{len(brief['failing_endpoints'])} endpoint(s) with failures[/dim]")
+                lines.append("")
+
+            # Failing endpoints
+            if brief["failing_endpoints"]:
+                lines.append(f"  [bold]Top failing endpoints:[/bold]")
+                for ep in brief["failing_endpoints"]:
+                    lines.append(
+                        f"    [red]✗[/red]  {ep.get('method','?')} {ep['endpoint']}"
+                        f"  [dim]({ep['errors']} error(s))[/dim]"
+                    )
+                lines.append("")
+
+            # Most recent failure
+            if brief["recent_failure"]:
+                rf = brief["recent_failure"]
+                ts = rf.get("timestamp", rf.get("written_at", ""))[:19].replace("T", " ")
+                lines.append(
+                    f"  [bold]Most recent failure:[/bold]"
+                    f"  {rf.get('method','?')} {rf.get('request','?')}"
+                    f"  [red]{rf.get('response_status','?')}[/red]"
+                    f"  [dim]@ {ts}[/dim]"
+                )
+                lines.append("")
+
+            # Slow endpoints
+            if brief["slow_endpoints"]:
+                lines.append(f"  [bold]Slowest endpoints:[/bold]")
+                for ep in brief["slow_endpoints"]:
+                    avg = ep.get("avg_ms", 0)
+                    flag = "[red]" if avg > 5000 else "[yellow]" if avg > 2000 else "[dim]"
+                    lines.append(f"    {flag}~{avg:,} ms[/dim]  {ep['endpoint']}")
+                lines.append("")
+
+            # Suggested questions
+            if brief["suggestions"]:
+                lines.append(f"  [bold]Try asking:[/bold]")
+                for s in brief["suggestions"]:
+                    lines.append(f"    [cyan]•[/cyan] {s}")
+
+            console.print(Panel(
+                "\n".join(lines),
+                border_style="blue",
+                padding=(0, 1),
+            ))
+            console.print()
 
     turn = 0
     while True:
