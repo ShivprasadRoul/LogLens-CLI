@@ -72,8 +72,15 @@ _SYNTHESIS_SYSTEM = textwrap.dedent("""\
     - NEVER reference or reuse numbers, endpoints, or findings from the conversation
       history. The history is only provided for conversational flow — treat each
       question as an independent analysis against the Retrieved Data.
-    - If "Retrieved Data" is empty or says "NO DATA FOUND", explicitly say no matching
-      records were found and suggest what the user could try instead.
+    - If "Retrieved Data" is empty or says "NO DATA FOUND":
+      a) Check if a "Similar Data Found" section is provided below — if yes, show
+         the user what similar/related data IS available and ask a clarifying question
+         (e.g. "Did you mean one of these endpoints: /v1/study, /v1/media...?").
+      b) If no similar data either, explicitly say no matching records were found and
+         suggest what the user could try (e.g. different keywords, broader search).
+    - When the user’s question is ambiguous or uses informal names, try to map their
+      intent to the actual data. If you can’t, ASK a follow-up question rather than
+      just saying "no data found".
     - Be specific: use exact numbers, timestamps, and field values from the data.
     - Tone: Confident analyst.
 """)
@@ -141,8 +148,20 @@ class LogAgent:
             records_path, schema_text, query_text, domain_context, id_map_summary, jq_hints
         )
 
+        # ── Fuzzy discovery fallback ──
+        # When retrieval returns empty, run a discovery query to find
+        # related data so the synthesis can suggest alternatives.
+        discovery_ctx = ""
+        is_empty = not jq_out or jq_out.strip() in ("", "null", "[]", "{}")
+        if is_empty:
+            discovery_ctx = self._discover_related(
+                records_path, schema_text, query_text, domain_context, jq_hints
+            )
+
         # Synthesis — with hallucination guard
-        answer = self._synthesize(query_text, jq_out, domain_context, id_map_summary, history)
+        answer = self._synthesize(
+            query_text, jq_out, domain_context, id_map_summary, history, discovery_ctx
+        )
 
         return {
             "answer":   answer,
@@ -211,6 +230,36 @@ class LogAgent:
         # Exhausted retries — return whatever we last got (could be empty)
         last_out, _ = self._run_jq(prev_attempts[-1]["jq"], records_path)
         return last_out or "", prev_attempts[-1]["jq"], total_attempts
+
+    def _discover_related(self,
+                          records_path: Path,
+                          schema_text: str,
+                          query: str,
+                          domain_ctx: str,
+                          jq_hints: str) -> str:
+        """When the main query returned empty, run a broader discovery query
+        to find similar/related data the user might have been looking for.
+        
+        Returns a context string with discovered alternatives, or "".
+        """
+        discovery_prompt = (
+            f"The user asked: '{query}' but no exact match was found. "
+            f"Generate a JQ program that finds potentially RELATED data. "
+            f"For example: list all unique values of .request (API endpoints), "
+            f"or unique .logger values, or unique .message patterns that might be "
+            f"related to what the user is looking for. Show up to 20 unique values. "
+            f"Return a compact JSON array or object."
+        )
+        try:
+            discovery_jq, _ = self._generate_jq(
+                schema_text, discovery_prompt, domain_ctx, "", jq_hints=jq_hints
+            )
+            discovery_out, _ = self._run_jq(discovery_jq, records_path)
+            if discovery_out and discovery_out.strip() not in ("", "null", "[]", "{}"):
+                return discovery_out[:3000]
+        except Exception:
+            pass
+        return ""
 
     # ── JQ Code Generation ────────────────────────────────────────────────────
 
@@ -303,7 +352,8 @@ class LogAgent:
                     jq_out: str,
                     domain_ctx: str,
                     id_map_ctx: str,
-                    history: List[Dict[str, str]]) -> str:
+                    history: List[Dict[str, str]],
+                    discovery_ctx: str = "") -> str:
         """Turn JQ output into a natural language insight.
         
         If jq_out is empty, the LLM is explicitly told no data was found
@@ -321,6 +371,16 @@ class LogAgent:
         )
         if len(jq_out) > self.max_jq_bytes:
             data_section += f"\n... [truncated — {len(jq_out):,} bytes total]"
+
+        # Add discovery context when main query returned empty
+        discovery_section = ""
+        if discovery_ctx:
+            discovery_section = (
+                f"\n\nSimilar Data Found (the exact query returned no results, "
+                f"but here is related data from the logs that might help — "
+                f"use this to suggest what the user might have meant):\n"
+                f"{discovery_ctx}"
+            )
 
         system_prompt = _SYNTHESIS_SYSTEM + f"\n\n{domain_ctx}\n\n{id_map_ctx}"
 
@@ -345,7 +405,7 @@ class LogAgent:
 
         messages: List[Dict[str, str]] = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"{history_summary}\n\nQuestion: {query}\n\nRetrieved Data:\n{data_section}"}
+            {"role": "user", "content": f"{history_summary}\n\nQuestion: {query}\n\nRetrieved Data:\n{data_section}{discovery_section}"}
         ]
 
         resp = self.client.chat.completions.create(
