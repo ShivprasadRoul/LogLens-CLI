@@ -122,10 +122,13 @@ class LogParser:
                 break
         
         # Normalize Level
-        for level_field in ["level", "severity", "log_level", "priority"]:
-            if level_field in record and not record.get("level"):
-                record["level"] = str(record[level_field]).upper()
+        level_val = record.get("level")
+        for level_field in ["severity", "log_level", "priority"]:
+            if level_field in record and not level_val:
+                level_val = record[level_field]
                 break
+        if level_val:
+            record["level"] = str(level_val).upper()
 
         # Normalize Message
         for msg_field in ["message", "msg", "log", "text"]:
