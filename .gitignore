@@ -74,3 +74,6 @@ dist/
 build/
 *.egg-info/
 *.json
+
+# Reference / scratch files
+test.py
