@@ -1,0 +1,43 @@
+[project]
+name = "loglens"
+version = "0.1.0"
+description = "AI-Powered Log Intelligence CLI"
+readme = "README.md"
+requires-python = ">=3.9"
+authors = [
+    { name = "LogLens Team" }
+]
+keywords = ["logs", "cli", "ai", "llm"]
+
+dependencies = [
+    "typer[all]>=0.9.0",
+    "pydantic>=2.0.0",
+    "jq>=0.2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "ruff>=0.1.0",
+    "black>=23.0.0",
+]
+
+[project.scripts]
+loglens = "loglens.cli:app"
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.black]
+line-length = 100
+target-version = ["py39"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+select = ["E", "F", "W"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
