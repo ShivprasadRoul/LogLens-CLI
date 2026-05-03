@@ -1,8 +1,5 @@
 <div align="center">
-  <img src="https://raw.githubusercontent.com/ShivprasadRoul/LogLens/main/docs/logo.png" width="120" alt="LogLens Logo" />
-  <h1>LogLens</h1>
-  <p><strong>AI-Powered Log Intelligence CLI (Vectorless RAG)</strong></p>
-  <p>Ask plain-English questions about massive log files, get accurate answers without a vector database.</p>
+  <img src="https://raw.githubusercontent.com/ShivprasadRoul/LogLens/main/docs/logo.png" width="100%" alt="LogLens — AI-Powered Log Analysis CLI" />
 </div>
 
 ---
