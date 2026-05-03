@@ -198,10 +198,17 @@ class LogAgent:
         """Pass 1: Explore — confirm real field names via sample.
            Pass 2: Extract — precise query with retry loop."""
 
-        # ── Pass 1: Explore ──
+        # ── Pass 1: Keyword-aware Explore ──
+        # Instead of asking the LLM to "sample 3 relevant records" (which often
+        # misses the target), we extract keywords from the user's query and
+        # instruct the LLM to search for them across multiple fields.
         explore_query = (
-            f"Sample 3 records most relevant to this query: '{query}'. "
-            f"Include all fields. Do not filter by time yet — just show raw examples."
+            f"The user asked: '{query}'. "
+            f"Find records that match ANY keyword from the question. "
+            f"Search across .request, .message, .msg, .logger, and .raw fields "
+            f"using case-insensitive substring matching (test/contains). "
+            f"Return up to 5 matching records with ALL their fields. "
+            f"If no keyword match is found, sample 3 random records instead."
         )
         explore_jq, _ = self._generate_jq(schema_text, explore_query, domain_ctx, "", jq_hints=jq_hints)
         sample_out, sample_err = self._run_jq(explore_jq, records_path)
@@ -209,7 +216,7 @@ class LogAgent:
         sample_context = ""
         if sample_out and sample_out not in ("null", "[]", "{}"):
             sample_context = (
-                f"\n\nPass 1 sample — use these EXACT field names and timestamp values:\n"
+                f"\n\nPass 1 sample — use these EXACT field names, values, and structure:\n"
                 f"{sample_out[:3000]}"
             )
         else:
@@ -220,6 +227,17 @@ class LogAgent:
             )
 
         # ── Pass 2: Extract with retry loop ──
+        # Emphasize: return ALL matching records, let synthesis compute stats.
+        augmented_query = (
+            f"{query}\n\n"
+            f"IMPORTANT INSTRUCTIONS FOR JQ:\n"
+            f"1. Return ALL records matching the user's target (endpoint, logger, etc.) — "
+            f"do NOT pre-filter by response_status, level, or error type.\n"
+            f"2. Include key fields: request, method, response_status, response_time_ms, "
+            f"timestamp, level, message, correlation_id (whichever exist).\n"
+            f"3. Do NOT compute failure rates, percentages, or aggregations in JQ.\n"
+            f"4. Keep the query simple: map(select(...)) | map({{field1, field2, ...}})"
+        )
         prev_attempts: List[Dict[str, str]] = []
         combined_ctx = id_map_ctx + sample_context
         total_attempts = 1  # Pass 1
@@ -227,7 +245,7 @@ class LogAgent:
         for attempt_num in range(1, self.MAX_RETRIES + 1):
             total_attempts += 1
             precise_jq, _ = self._generate_jq(
-                schema_text, query, domain_ctx, combined_ctx,
+                schema_text, augmented_query, domain_ctx, combined_ctx,
                 prev_attempts=prev_attempts,
                 jq_hints=jq_hints,
             )
