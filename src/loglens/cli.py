@@ -432,8 +432,8 @@ def chat(
                 lines.append(f"  [bold]Slowest endpoints:[/bold]")
                 for ep in brief["slow_endpoints"]:
                     avg = ep.get("avg_ms", 0)
-                    flag = "[red]" if avg > 5000 else "[yellow]" if avg > 2000 else "[dim]"
-                    lines.append(f"    {flag}~{avg:,} ms[/dim]  {ep['endpoint']}")
+                    flag = "red" if avg > 5000 else "yellow" if avg > 2000 else "dim"
+                    lines.append(f"    [{flag}]~{avg:,} ms[/{flag}]  {ep['endpoint']}")
                 lines.append("")
 
             # Suggested questions
