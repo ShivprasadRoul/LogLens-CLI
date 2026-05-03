@@ -528,9 +528,9 @@ def update() -> None:
     """Pull the latest LogLens code from GitHub (self-update)."""
     import subprocess
 
-    install_dir = Path.home() / ".loglens" / "install" / "LogLens"
-    if not install_dir.exists():
-        console.print("[error]Error:[/error] LogLens install directory not found at ~/.loglens/install/LogLens")
+    install_dir = Path.home() / ".loglens" / "install"
+    if not (install_dir / ".git").exists():
+        console.print("[error]Error:[/error] LogLens install directory not found at ~/.loglens/install")
         console.print("[muted]If you installed from source, just run: git pull[/muted]")
         raise typer.Exit(1)
 
