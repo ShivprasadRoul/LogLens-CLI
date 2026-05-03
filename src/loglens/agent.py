@@ -50,10 +50,25 @@ _JQ_RULES = textwrap.dedent("""\
       - Level filtering: .level == "ERROR"
       - Null-safe: .field? // ""
 
-    OUTPUT:
-      - Return minimal, relevant data — never dump the whole array.
-      - For counting: group_by(.field) | map({key: .[0].field, count: length})
+    FUZZY MATCHING (CRITICAL):
+      - When the user asks about an API/endpoint using informal names (e.g. "publish api",
+        "import endpoint", "analytics service"), use `test()` with a substring pattern
+        to match. NEVER hardcode exact endpoint paths — always use fuzzy matching.
+      - Example: user says "publish api" → use: .request | test("publish"; "i")
+      - Example: user says "import endpoint" → use: .request | test("import"; "i")
+      - If unsure which field contains the target, search across multiple fields:
+        select((.request? // "" | test("pattern"; "i")) or (.message? // "" | test("pattern"; "i")))
+
+    OUTPUT STRATEGY:
+      - PREFER SIMPLE QUERIES. Return the filtered records and let the synthesis
+        step compute statistics. Do NOT attempt complex multi-step aggregations
+        (group_by + from_entries + arithmetic) — these often fail silently.
+      - GOOD: map(select(.request | test("publish"; "i"))) | map({request, method, response_status, response_time_ms})
+      - BAD:  Complex 5-step pipeline with from_entries, $variables, and arithmetic
+      - For counting/grouping, keep it to at most 2 steps:
+          map(select(...)) | group_by(.field) | map({key: .[0].field, count: length})
       - For top-N: sort_by(.count) | reverse | limit(10; .[])
+      - If the dataset is small (<100 filtered records), just return all matching records.
 
     DO NOT invent functions. If a builtin is not in the list above, do not use it.
 """)
